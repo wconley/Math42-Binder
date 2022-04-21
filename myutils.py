@@ -34,7 +34,10 @@ def interact(_function_to_wrap=None, _layout="horizontal", **kwargs):
 def latex_matrix(m, round=None):
     if round is not None:
         m = np.round(m, round)
-    m = np.array(m, dtype=str)
+    if isinstance(m[0][0], complex):
+        m = np.array([[latex_complex(a) for a in row] for row in m], dtype=str)
+    else:
+        m = np.array(m, dtype=str)
     rows = [" & ".join(row) for row in m]
     matrix = r" \\ ".join(rows)
     return r"\begin{pmatrix} " + matrix + r" \end{pmatrix}"
@@ -43,23 +46,41 @@ def latex_matrix(m, round=None):
 def latex_vector(v, round=None):
     if round is not None:
         v = np.round(v, round)
-    v = np.array(v, dtype=str)
+    if isinstance(v[0], complex):
+        v = np.array([latex_complex(a) for a in v], dtype=str)
+    else:
+        v = np.array(v, dtype=str)
     vector = r" \\ ".join(v)
     return r"\begin{bmatrix} " + vector + r" \end{bmatrix}"
 
 
-def latex(x, round=None):
+def latex_complex(z, round=None, conjpair=False):
+    if round is not None:
+        z = np.round(z, round)
+    if z.imag == 0:
+        return f"{z.real}"
+    if z.real == 0:
+        if conjpair:
+            return fr"\pm {abs(z.imag)}i"
+        return f"{z.imag}i"
+    pm = r"\pm" if conjpair else "+" if z.imag > 0 else "-"
+    return f"{z.real} {pm} {abs(z.imag)}i"
+
+
+def latex(x, round=None, conjpair=False):
     try:
         x = np.array(x)
         shape = x.shape
     except:
         shape = None
-    if shape is None or len(shape) < 1 or len(shape) > 2:
-        raise ValueError("argument is not a vector nor a matrix")
+    if shape is None or len(shape) > 2:
+        raise ValueError("argument is not a scalar nor a vector nor a matrix")
+    if len(shape) == 0:
+        return latex_complex(x, round=round, conjpair=conjpair)
     if len(shape) == 1:
-        return latex_vector(x, round)
+        return latex_vector(x, round=round)
     if len(shape) == 2:
-        return latex_matrix(x, round)
+        return latex_matrix(x, round=round)
 
 
 def ddeint(f, history, tmax, tmin=0, **options):
