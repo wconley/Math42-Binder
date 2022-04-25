@@ -31,56 +31,49 @@ def interact(_function_to_wrap=None, _layout="horizontal", **kwargs):
     return decorator(_function_to_wrap)
 
 
-def latex_matrix(m, round=None):
-    if round is not None:
-        m = np.round(m, round)
-    if isinstance(m[0][0], complex):
-        m = np.array([[latex_complex(a) for a in row] for row in m], dtype=str)
-    else:
-        m = np.array(m, dtype=str)
-    rows = [" & ".join(row) for row in m]
-    matrix = r" \\ ".join(rows)
-    return r"\begin{pmatrix} " + matrix + r" \end{pmatrix}"
-
-
-def latex_vector(v, round=None):
-    if round is not None:
-        v = np.round(v, round)
-    if isinstance(v[0], complex):
-        v = np.array([latex_complex(a) for a in v], dtype=str)
-    else:
-        v = np.array(v, dtype=str)
-    vector = r" \\ ".join(v)
-    return r"\begin{bmatrix} " + vector + r" \end{bmatrix}"
-
-
-def latex_complex(z, round=None, conjpair=False):
+def latex_scalar(z, round=None, conjpair=False):
+    if isinstance(z, str):
+        return z
     if round is not None:
         z = np.round(z, round)
+    a = np.format_float_positional(z.real + 0, precision=round, trim="-")
     if z.imag == 0:
-        return f"{z.real}"
+        return a
+    if abs(z.imag) == 1:
+        b = ""
+    else:
+        b = np.format_float_positional(abs(z.imag), precision=round, trim="-")
+    pm = (("+", "-"), ("±", "∓"))[int(conjpair)][int(z.imag < 0)]
     if z.real == 0:
-        if conjpair:
-            return fr"\pm {abs(z.imag)}i"
-        return f"{z.imag}i"
-    pm = r"\pm" if conjpair else "+" if z.imag > 0 else "-"
-    return f"{z.real} {pm} {abs(z.imag)}i"
+        return f"{'' if pm == '+' else pm}{b}i"
+    return f"{a} {pm} {b}i"
 
 
-def latex(x, round=None, conjpair=False):
+def latex_vector(v, **options):
+    contents = r" \\ ".join([latex_scalar(a, **options) for a in v])
+    return fr"\begin{{bmatrix}} {contents} \end{{bmatrix}}"
+
+
+def latex_matrix(m, **options):
+    rows = [" & ".join([latex_scalar(a, **options) for a in row]) for row in m]
+    contents = r" \\ ".join(rows)
+    return fr"\begin{{pmatrix}} {contents} \end{{pmatrix}}"
+
+
+def latex(x, **options):
     try:
-        x = np.array(x)
-        shape = x.shape
+        y = np.array(x)
+        shape = y.shape
     except:
         shape = None
     if shape is None or len(shape) > 2:
         raise ValueError("argument is not a scalar nor a vector nor a matrix")
     if len(shape) == 0:
-        return latex_complex(x, round=round, conjpair=conjpair)
+        return latex_scalar(x, **options)
     if len(shape) == 1:
-        return latex_vector(x, round=round)
+        return latex_vector(x, **options)
     if len(shape) == 2:
-        return latex_matrix(x, round=round)
+        return latex_matrix(x, **options)
 
 
 def ddeint(f, history, tmax, tmin=0, **options):
