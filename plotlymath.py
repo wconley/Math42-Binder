@@ -191,10 +191,17 @@ class PlotlyAxes(object):
                 self._update_item(index, value)
 
     def __getattr__(self, name):
-        value = self._items.get(name)
-        if value is None:
+        index = self._items.get(name)
+        if index is None:
             raise AttributeError(f"this axes object has no attribute '{name}'")
-        return value
+        index, kind = divmod(index, 3)
+        if kind == self.ANNOTATION:
+            return self._figure.layout.annotations[index]
+        if kind == self.ANNOTATION3D:
+            subplot = self._figure.get_subplot(self._row, self._col)
+            return subplot.annotations[index]
+        if kind == self.OTHER:
+            return self._figure.data[index]
 
     def axes_labels(self, *labels):
         subplot = self._figure.get_subplot(self._row, self._col)
