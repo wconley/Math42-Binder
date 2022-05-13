@@ -1,4 +1,5 @@
 import warnings
+from functools import wraps
 from random import randrange
 
 import numpy as np
@@ -138,11 +139,12 @@ set_defaults()
 class PlotlyAxes(object):
     ANNOTATION, ANNOTATION3D, OTHER = range(3)
 
-    def __init__(self, figure, row, col):
+    def __init__(self, figure, items, row, col):
         self._figure = figure
+        self._items = items
         self._row = row
         self._col = col
-        self._items = {}
+        self._subplot = figure.get_subplot(row, col)
         self._aspect_ratio = None
 
     def _add_item(self, item):
@@ -155,9 +157,8 @@ class PlotlyAxes(object):
             else:
                 self._figure.add_annotation(item, row=self._row, col=self._col)
         elif isinstance(item, plotly.graph_objects.layout.scene.Annotation):
-            subplot = self._figure.get_subplot(self._row, self._col)
-            index = 3*len(subplot.annotations) + self.ANNOTATION3D
-            subplot.annotations += (item,)
+            index = 3*len(self._subplot.annotations) + self.ANNOTATION3D
+            self._subplot.annotations += (item,)
         else:
             index = 3*len(self._figure.data) + self.OTHER
             self._figure.add_trace(item, row=self._row, col=self._col)
@@ -172,94 +173,139 @@ class PlotlyAxes(object):
         if kind == self.ANNOTATION:
             self._figure.layout.annotations[index].update(item)
         elif kind == self.ANNOTATION3D:
-            subplot = self._figure.get_subplot(self._row, self._col)
-            subplot.annotations[index].update(item)
+            self._subplot.annotations[index].update(item)
         elif kind == self.OTHER:
             self._figure.data[index].update(item)
 
-    def __setattr__(self, name, value):
-        if name[0] == "_":
-            object.__setattr__(self, name, value)
-        elif name in self.__dict__:
-            raise AttributeError(f"Cannot overwrite existing attribute {name}")
-        else:
-            index = self._items.get(name)
+    def __setitem__(self, name, value):
+        key = (self._row, self._col, name)
+        index = self._items.get(key)
+        if isinstance(name, str) and name.endswith("[]"):
             if index is None:
-                index = self._add_item(value)
-                self._items[name] = index
-            else:
-                self._update_item(index, value)
+                self._items[key] = []
+            self._items[key].append(self._add_item(value))
+        elif index is None:
+            self._items[key] = self._add_item(value)
+        else:
+            self._update_item(index, value)
 
-    def __getattr__(self, name):
-        index = self._items.get(name)
+    def __getitem__(self, name):
+        index = self._items.get((self._row, self._col, name))
         if index is None:
-            raise AttributeError(f"this axes object has no attribute '{name}'")
+            raise KeyError(f"this axes object has no item '{name}'")
+        return self._get_objects(index)
+
+    def _get_objects(self, index):
+        if isinstance(index, (tuple, list)):
+            return tuple([self._get_objects(i) for i in index])
         index, kind = divmod(index, 3)
         if kind == self.ANNOTATION:
             return self._figure.layout.annotations[index]
         if kind == self.ANNOTATION3D:
-            subplot = self._figure.get_subplot(self._row, self._col)
-            return subplot.annotations[index]
+            return self._subplot.annotations[index]
         if kind == self.OTHER:
             return self._figure.data[index]
 
+    def __delitem__(self, names):
+        if not isinstance(names, (tuple, list)):
+            names = (names,)
+        for name in names:
+            if (self._row, self._col, name) not in self._items:
+                raise KeyError(f"this axes object has no item '{name}'")
+        items = []
+        for name in names:
+            self._getitems(self._items.pop((self._row, self._col, name)), items)
+        items.sort(reverse=True)
+        indices = ([], [], [])
+        for item in items:
+            index, kind = divmod(item, 3)
+            indices[kind].append(index)
+            self._items = {key: self._shift_index(item, index, kind) for 
+                           key, item in self._items.items()}
+        if indices[self.ANNOTATION]:
+            temp = list(self._figure.layout.annotations)
+            for index in indices[self.ANNOTATION]:
+                temp.pop(index)
+            self._figure.layout.annotations = temp
+        if indices[self.ANNOTATION3D]:
+            temp = list(self._subplot.annotations)
+            for index in indices[self.ANNOTATION3D]:
+                temp.pop(index)
+            self._subplot.annotations = temp
+        if indices[self.OTHER]:
+            temp = list(self._figure.data)
+            for index in indices[self.OTHER]:
+                temp.pop(index)
+            self._figure.data = temp
+
+    def _getitems(self, item, items):
+        if isinstance(item, (tuple, list)):
+            for i in item:
+                self._getitems(i, items)
+        else:
+            items.append(item)
+
+    def _shift_index(self, item, index, kind):
+        if isinstance(item, (tuple, list)):
+            return [self._shift_index(i, index, kind) for i in item]
+        item_index, item_kind = divmod(item, 3)
+        return item - 3 if (item_kind == kind and item_index > index) else item
+
     def axes_labels(self, *labels):
-        subplot = self._figure.get_subplot(self._row, self._col)
-        numaxes = 3 if hasattr(subplot, "zaxis") else 2
+        numaxes = 3 if hasattr(self._subplot, "zaxis") else 2
         if len(labels) != numaxes:
             raise ValueError(f"expected {numaxes} labels but got {len(labels)}")
-        subplot.xaxis.title.text = labels[0]
-        subplot.yaxis.title.text = labels[1]
+        self._subplot.xaxis.title.text = labels[0]
+        self._subplot.yaxis.title.text = labels[1]
         if numaxes == 3:
-            subplot.zaxis.title.text = labels[2]
+            self._subplot.zaxis.title.text = labels[2]
 
     def axes_ranges(self, *ranges, scale=None):
-        subplot = self._figure.get_subplot(self._row, self._col)
-        numaxes = 3 if hasattr(subplot, "zaxis") else 2
+        numaxes = 3 if hasattr(self._subplot, "zaxis") else 2
         if len(ranges) != numaxes:
             raise ValueError(f"expected {numaxes} ranges but got {len(ranges)}")
         if ranges[0] == "off": # First deal with the x-axis
-            subplot.xaxis.showline = False
-            subplot.xaxis.showticklabels = False
-            subplot.yaxis.zeroline = False
+            self._subplot.xaxis.showline = False
+            self._subplot.xaxis.showticklabels = False
+            self._subplot.yaxis.zeroline = False
             if len(ranges) == 3:
-                subplot.zaxis.zeroline = False
+                self._subplot.zaxis.zeroline = False
         elif isinstance(ranges[0], str): # "normal", "tozero", or "nonnegative"
-            subplot.xaxis.rangemode = ranges[0]
+            self._subplot.xaxis.rangemode = ranges[0]
         else: # Otherwise, range should be a 2-tuple (or list) of numbers
-            subplot.xaxis.range = ranges[0]
+            self._subplot.xaxis.range = ranges[0]
         if ranges[1] == "off": # First deal with the y-axis
-            subplot.yaxis.showline = False
-            subplot.yaxis.showticklabels = False
-            subplot.xaxis.zeroline = False
+            self._subplot.yaxis.showline = False
+            self._subplot.yaxis.showticklabels = False
+            self._subplot.xaxis.zeroline = False
             if len(ranges) == 3:
-                subplot.zaxis.zeroline = False
+                self._subplot.zaxis.zeroline = False
         elif isinstance(ranges[1], str): # "normal", "tozero", or "nonnegative"
-            subplot.yaxis.rangemode = ranges[1]
+            self._subplot.yaxis.rangemode = ranges[1]
         else: # Otherwise, range should be a 2-tuple (or list) of numbers
-            subplot.yaxis.range = ranges[1]
+            self._subplot.yaxis.range = ranges[1]
         if len(ranges) == 3: # Then deal with the z-axis if applicable
             if ranges[2] == "off":
-                subplot.zaxis.showline = False
-                subplot.zaxis.showticklabels = False
-                subplot.xaxis.zeroline = False
-                subplot.yaxis.zeroline = False
+                self._subplot.zaxis.showline = False
+                self._subplot.zaxis.showticklabels = False
+                self._subplot.xaxis.zeroline = False
+                self._subplot.yaxis.zeroline = False
             elif isinstance(ranges[2], str):
-                subplot.zaxis.rangemode = ranges[2]
+                self._subplot.zaxis.rangemode = ranges[2]
             else:
-                subplot.zaxis.range = ranges[2]
+                self._subplot.zaxis.range = ranges[2]
         if scale is not None: # Then deal with the aspect ratio/scale ratio
             if len(ranges) == 2: # 2D case. NOTE: scale must be a 2-tuple
                 if not (isinstance(scale, (tuple, list)) and len(scale) == 2):
                     raise ValueError(f"'scale' must be a 2-tuple, got {scale}")
                 x, y = scale
-                subplot.xaxis.constrain = "domain"
-                subplot.yaxis.constrain = "domain"
-                subplot.yaxis.scaleanchor = "x"
-                subplot.yaxis.scaleratio = y / x
+                self._subplot.xaxis.constrain = "domain"
+                self._subplot.yaxis.constrain = "domain"
+                self._subplot.yaxis.scaleanchor = "x"
+                self._subplot.yaxis.scaleratio = y / x
                 self._aspect_ratio = y / x
             elif isinstance(scale, str): # 3D case, one of the automatic modes
-                subplot.aspectmode = scale
+                self._subplot.aspectmode = scale
             elif isinstance(scale, (tuple, list)) and len(scale) == 3:
                 # 3D case, manually specified aspect ratio. NOTE: In this case, 
                 # all three axis ranges must be manually specified also. 
@@ -269,8 +315,8 @@ class PlotlyAxes(object):
                 y *= ymax - ymin
                 z *= zmax - zmin
                 c = sorted((x, y, z))[1]
-                subplot.aspectmode = "manual"
-                subplot.aspectratio.update(x=x/c, y=y/c, z=z/c)
+                self._subplot.aspectmode = "manual"
+                self._subplot.aspectratio.update(x=x/c, y=y/c, z=z/c)
             else:
                 raise ValueError(f"'scale' must be str or 3-tuple, got {scale}")
 
@@ -279,10 +325,9 @@ class PlotlyAxes(object):
         # If it was set in a call to axes_ranges(), return that
         if self._aspect_ratio is not None:
             return self._aspect_ratio
-        subplot = self._figure.get_subplot(self._row, self._col)
         # NOT YET IMPLEMENTED: What to do for a 3D plot?
-        if hasattr(subplot, "zaxis"):
-            a = subplot.aspectratio
+        if hasattr(self._subplot, "zaxis"):
+            a = self._subplot.aspectratio
             return (a.x, a.y, a.z)
         # Otherwise, we attempt to compute it from known data, or guess
         x, y = self.resolution
@@ -290,10 +335,10 @@ class PlotlyAxes(object):
 
     @property
     def resolution(self):
-        subplot = self._figure.get_subplot(self._row, self._col)
         # NOT YET IMPLEMENTED: What to do for a 3D plot?
-        if hasattr(subplot, "zaxis"):
+        if hasattr(self._subplot, "zaxis"):
             return (1, 1, 1)
+        subplot = self._subplot
         if subplot.xaxis.range is None or subplot.yaxis.range is None:
             return (None, None)
         def span(a): return a[1] - a[0]
@@ -311,11 +356,12 @@ def make_figure(rows=1, cols=1, **options):
     if widget:
         options.setdefault("figure", plotly.graph_objects.FigureWidget())
     figure = plotly.subplots.make_subplots(rows, cols, **options)
+    items = {}
     subplots = np.empty((rows, cols), dtype=object)
     for i in range(rows):
         for j in range(cols):
             if figure.get_subplot(i + 1, j + 1):
-                subplots[i,j] = PlotlyAxes(figure, i + 1, j + 1)
+                subplots[i,j] = PlotlyAxes(figure, items, i + 1, j + 1)
     if squeeze:
         if rows == cols == 1:
             subplots = subplots[0,0]
@@ -349,6 +395,7 @@ def vectorize(f, inputs, outputs):
 def text(text, location, **options):
     options = options.copy()
     x, y = np.array(location, dtype=float)
+    options.pop("plot", None)
     options.setdefault("font_color", options.pop("color", None))
     if (size := options.pop("size", None)) is not None:
         options.setdefault("font_size", size)
@@ -377,7 +424,11 @@ def text(text, location, **options):
 
 def points(points, **options):
     options = options.copy()
-    x, y = np.array(points, dtype=float).transpose()
+    try:
+        x, y = np.array(points, dtype=float).transpose()
+    except:
+        x = y = []
+    options.pop("plot", None)
     options.setdefault("marker_color", options.pop("color", None))
     options.setdefault("marker_size", options.pop("size", 8))
     options.setdefault("mode", "markers")
@@ -386,7 +437,11 @@ def points(points, **options):
 
 def lines(points, **options):
     options = options.copy()
-    x, y = np.array(points, dtype=float).transpose()
+    try:
+        x, y = np.array(points, dtype=float).transpose()
+    except:
+        x = y = []
+    options.pop("plot", None)
     options.setdefault("line_color", options.pop("color", None))
     options.setdefault("mode", "lines")
     if options.pop("smooth", False):
@@ -492,6 +547,7 @@ def parametric(f, t_range, **options):
 
 def contour(f, x_range, y_range, **options):
     options = options.copy()
+    options.pop("plot", None)
     samples = options.pop("samples", 101)
     try:
         samplesx, samplesy = samples
@@ -513,6 +569,7 @@ def contour(f, x_range, y_range, **options):
 def implicit(f, x_range, y_range, **options):
     options = options.copy()
     constant = options.pop("C", 0)
+    options.pop("plot", None)
     options.setdefault("contours_start", constant)
     options.setdefault("contours_end", constant)
     options.setdefault("ncontours", 1)
@@ -522,6 +579,7 @@ def implicit(f, x_range, y_range, **options):
 
 def vector(vec, start=(0, 0), axes_scale=(1, 1), **options):
     options = options.copy()
+    options.pop("plot", None) # TEMPORARY. Need to do something with this
     arrow_style = options.pop(arrow_style, default_arrow_style)
     if isinstance(arrow_style, str):
         arrow_style = ARROW_STYLES[arrow_style]
@@ -554,6 +612,7 @@ def vector(vec, start=(0, 0), axes_scale=(1, 1), **options):
 
 def vector_field(f, x_range, y_range, **options):
     options = options.copy()
+    options.pop("plot", None) # TEMPORARY. Need to do something with this
     axes_scale = options.pop("axes_scale", None)
     axes_aspect = options.pop("axes_aspect", (4, 3))
     scalefactor = options.pop("scalefactor", 1)
@@ -643,6 +702,7 @@ def vector_field(f, x_range, y_range, **options):
 
 def trajectory(trajectory, **options):
     options = options.copy
+    options.pop("plot", None) # TEMPORARY. Need to do something with this
     color = options.pop("color", "blue")
     arrows = options.pop("arrows", 6)
     options.setdefault("legendgroup", f"{randrange(1 << 32):08X}")
@@ -674,6 +734,7 @@ def trajectory(trajectory, **options):
 def text3d(text, location, **options):
     options = options.copy()
     x, y, z = np.array(location, dtype=float)
+    options.pop("plot", None)
     options.setdefault("font_color", options.pop("color", None))
     if (size := options.pop("size", None)) is not None:
         options.setdefault("font_size", size)
@@ -701,6 +762,7 @@ def text3d(text, location, **options):
 def points3d(points, **options):
     options = options.copy()
     x, y, z = np.array(points, dtype=float).transpose()
+    options.pop("plot", None)
     options.setdefault("marker_color", options.pop("color", None))
     options.setdefault("marker_size", options.pop("size", 2.5))
     options.setdefault("mode", "markers")
@@ -710,6 +772,7 @@ def points3d(points, **options):
 def lines3d(points, **options):
     options = options.copy()
     x, y, z = np.array(points, dtype=float).transpose()
+    options.pop("plot", None)
     options.setdefault("line_color", options.pop("color", None))
     options.setdefault("mode", "lines")
     return plotly.graph_objects.Scatter3d(x=x, y=y, z=z, **options)
@@ -722,6 +785,7 @@ def function3d(f, x_range, y_range, **options):
         samplesx, samplesy = samples
     except:
         samplesx = samplesy = samples
+    options.pop("plot", None)
     if (color := options.pop("color", None)) is not None:
         options.setdefault("colorscale", (color, color))
     xmin, xmax = x_range
@@ -735,6 +799,7 @@ def function3d(f, x_range, y_range, **options):
 
 def parametric_curve3d(f, t_range, **options):
     options = options.copy()
+    options.pop("plot", None) # TEMPORARY. Need to do something with this
     plotpoints = options.pop("plotpoints", 101)
     options.setdefault("line_color", options.pop("color", "blue"))
     options.setdefault("mode", "lines")
@@ -742,8 +807,6 @@ def parametric_curve3d(f, t_range, **options):
     f1, f2, f3 = [fast_float(f_, t) for f_ in f]
     t = np.linspace(float(tmin), float(tmax), plotpoints)
     x, y, z = np.array([(f1(t0), f2(t0), f3(t0)) for t0 in t]).transpose()
-    if options.pop("update", False):
-        return dict(x=x, y=y, z=z)
     return plotly.graph_objects.Scatter3d(x=x, y=y, z=z, **options)
 
 
@@ -753,6 +816,7 @@ def parametric_surface3d(f, u_range, v_range, **options):
         samplesu, samplesv = samples
     except:
         samplesu = samplesv = samples
+    options.pop("plot", None)
     if (color := options.pop("color", None)) is not None:
         options.setdefault("colorscale", (color, color))
     umin, umax = u_range
@@ -772,6 +836,7 @@ def implicit3d(f, x_range, y_range, z_range, **options):
         plotpointsx, plotpointsy, plotpointsz = plotpoints
     except:
         plotpointsx = plotpointsy = plotpointsz = plotpoints
+    options.pop("plot", None)
     color=options.pop("color", "lightblue")
     options.setdefault("colorscale", [[0, color], [1, color]])
     options.setdefault("isomin", 0)
@@ -786,13 +851,12 @@ def implicit3d(f, x_range, y_range, z_range, **options):
     z = np.linspace(float(zmin), float(zmax), plotpointsz)
     x, y, z = [a.flatten() for a in np.meshgrid(x, y, z)]
     value = np.array([f(x0, y0, z0) for x0, y0, z0 in zip(x, y, z)])
-    if options.pop("update", False):
-        return dict(x=x, y=y, z=z, value=value)
     return plotly.graph_objects.Isosurface(x=x, y=y, z=z, value=value, **options)
 
 
 def vector3d(vec, start=(0, 0, 0), **options):
     options = options.copy()
+    options.pop("plot", None)
     tipsize = options.pop("tipsize", 0.20)
     shaftwidth = options.pop("shaftwidth", 3)
     color = options.pop("color", "black")
@@ -807,8 +871,6 @@ def vector3d(vec, start=(0, 0, 0), **options):
     x1, y1, z1 = start
     x2, y2, z2 = start + (1 - tipsize) * vec
     u, v, w = tipsize * vec
-    if options.pop("update", False):
-        return dict(x=[x1, x2], y=[y1, y2], z=[z1, z2]), dict(x=[x2], y=[y2], z=[z2], u=[u], v=[v], w=[w])
     shaft = plotly.graph_objects.Scatter3d(x=[x1, x2], y=[y1, y2], z=[z1, z2], **options)
     del options["mode"]
     del options["line_color"]
@@ -830,6 +892,7 @@ def vector_field3d(f, x_range, y_range, z_range, **options):
         plotpointsx, plotpointsy, plotpointsz = plotpoints
     except:
         plotpointsx = plotpointsy = plotpointsz = plotpoints
+    options.pop("plot", None)
     color = options.pop("color", "limegreen")
     options.setdefault("colorscale", [[0, color], [1, color]])
     x, xmin, xmax = x_range
@@ -846,24 +909,19 @@ def vector_field3d(f, x_range, y_range, z_range, **options):
     u, v, w = uvw
     #scale = diagonal / np.linalg.norm(uvw, axis=0).max()
     #options.setdefault("scale", scale)
-    if options.pop("update", False):
-        return dict(x=x, y=y, z=z, u=u, v=v, w=w)
     return plotly.graph_objects.Cone(x=x, y=y, z=z, u=u, v=v, w=w, **options)
 
 
 def trajectory3d(trajectory, **options):
     options = options.copy
+    options.pop("plot", None)
     color = options.pop("color", "blue")
     arrows = options.pop("arrows", 6)
     options.setdefault("legendgroup", f"{randrange(1 << 32):08X}")
     options.setdefault("mode", "lines")
     options.setdefault("line_color", color)
     x, y, z = trajectory.transpose()
-    update = options.pop("update", False)
-    if update:
-        p1 = dict(x=x, y=y, z=z)
-    else:
-        p1 = plotly.graph_objects.Scatter3d(x=x, y=y, z=z, **options)
+    p1 = plotly.graph_objects.Scatter3d(x=x, y=y, z=z, **options)
 
     del options["mode"]
     options["showlegend"] = False
@@ -880,10 +938,7 @@ def trajectory3d(trajectory, **options):
     cone_dir /= np.linalg.norm(cone_dir, axis=1)[:,np.newaxis]
     x, y, z = cone_pos.transpose()
     u, v, w = cone_dir.transpose()
-    if update:
-        p1 = dict(x=x, y=y, z=z, u=u, v=v, w=w)
-    else:
-        p2 = plotly.graph_objects.Cone(x=x, y=y, z=z, u=u, v=v, w=w, **options)
+    p2 = plotly.graph_objects.Cone(x=x, y=y, z=z, u=u, v=v, w=w, **options)
     return (p1, p2)
 
 
@@ -894,6 +949,7 @@ def vector_field_on_surface3d(f, field, u_range, v_range, **options):
         plotpointsu, plotpointsv = plotpoints
     except:
         plotpointsu = plotpointsv = plotpoints
+    options.pop("plot", None)
     color = options.pop("color", "limegreen")
     options.setdefault("colorscale", (color, color))
     u, umin, umax = u_range
@@ -909,8 +965,6 @@ def vector_field_on_surface3d(f, field, u_range, v_range, **options):
     vectors = np.array([(fx(u0, v0), fy(u0, v0), fz(u0, v0)) for u0, v0 in uv])
     x, y, z = points.transpose()
     u, v, w = vectors.transpose()
-    if options.pop("update", False):
-        return dict(x=x, y=y, z=z, u=u, v=v, w=w)
     return plotly.graph_objects.Cone(x=x, y=y, z=z, u=u, v=v, w=w, **options)
 
 
@@ -926,4 +980,78 @@ def vector_field_on_surface3d(f, field, u_range, v_range, **options):
 #    f1, f2, f3 = [fast_float(f_, u, v) for f_ in surface]
 #    x, y, z = np.array([(f1(u0, v0), f2(u0, v0), f3(u0, v0)) for u0, v0 in solution]).transpose()
 #    return plotly.graph_objects.Scatter3d(x=x, y=y, z=z, line_color=color, **options)
+
+
+def method_factory(f, custom=False):
+    @wraps(f)
+    def f_wrapper(self, *args, **options):
+        myid = options.pop("id", None)
+        if custom:
+            # A “custom function” accepts the "plot" option, a PlotlyAxes object
+            options.setdefault("plot", self)
+        item = f(*args, **options)
+        if myid is None:
+            self._add_item(item)
+        else:
+            self[myid] = item
+    return f_wrapper
+
+# These are all of the “custom” functions, i.e. the ones defined in this library
+for f in (text, points, lines, function, parametric, contour, implicit, vector, 
+          vector_field, trajectory, text3d, points3d, lines3d, function3d, 
+          parametric_curve3d, parametric_surface3d, implicit3d, vector3d, 
+          vector_field3d, vector_field_on_surface3d, trajectory3d):
+    # ... and we make all of them available as methods on a PlotlyAxes object
+    setattr(PlotlyAxes, f.__name__, method_factory(f, custom=True))
+
+# These are all of the stock Plotly functions from plotly.graph_objects
+for f in (plotly.graph_objects.Scatter, 
+          plotly.graph_objects.Scattergl, 
+          plotly.graph_objects.Bar, 
+          plotly.graph_objects.Pie, 
+          plotly.graph_objects.Heatmap, 
+          plotly.graph_objects.Heatmapgl, 
+          plotly.graph_objects.Image, 
+          plotly.graph_objects.Contour, 
+          plotly.graph_objects.Table, 
+          plotly.graph_objects.Box, 
+          plotly.graph_objects.Violin, 
+          plotly.graph_objects.Histogram, 
+          plotly.graph_objects.Histogram2d, 
+          plotly.graph_objects.Histogram2dContour, 
+          plotly.graph_objects.Ohlc, 
+          plotly.graph_objects.Candlestick, 
+          plotly.graph_objects.Waterfall, 
+          plotly.graph_objects.Funnel, 
+          plotly.graph_objects.Funnelarea, 
+          plotly.graph_objects.Indicator, 
+          plotly.graph_objects.Scatter3d, 
+          plotly.graph_objects.Surface, 
+          plotly.graph_objects.Mesh3d, 
+          plotly.graph_objects.Cone, 
+          plotly.graph_objects.Streamtube, 
+          plotly.graph_objects.Volume, 
+          plotly.graph_objects.Isosurface, 
+          plotly.graph_objects.Scattergeo, 
+          plotly.graph_objects.Choropleth, 
+          plotly.graph_objects.Scattermapbox, 
+          plotly.graph_objects.Choroplethmapbox, 
+          plotly.graph_objects.Densitymapbox, 
+          plotly.graph_objects.Scatterpolar, 
+          plotly.graph_objects.Scatterpolargl, 
+          plotly.graph_objects.Barpolar, 
+          plotly.graph_objects.Scatterternary, 
+          plotly.graph_objects.Sunburst, 
+          plotly.graph_objects.Treemap, 
+          plotly.graph_objects.Icicle, 
+          plotly.graph_objects.Sankey, 
+          plotly.graph_objects.Splom, 
+          plotly.graph_objects.Parcats, 
+          plotly.graph_objects.Parcoords, 
+          plotly.graph_objects.Carpet, 
+          plotly.graph_objects.Scattercarpet, 
+          plotly.graph_objects.Contourcarpet, 
+         ):
+    # ... and we make all of them available as methods on a PlotlyAxes object
+    setattr(PlotlyAxes, f.__name__, method_factory(f, custom=False))
 
