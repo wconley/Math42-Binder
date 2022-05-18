@@ -638,8 +638,8 @@ def vector_field(f, x_range, y_range, **options):
     tipslope2 = 1.0  # For an arrow pointing up, the slope of the trailing edge of the left side of the arrowhead
 
     # Set the axes ranges, and the axes_scale and axes_aspect
-    x, xmin, xmax = x_range
-    y, ymin, ymax = y_range
+    xmin, xmax = x_range
+    ymin, ymax = y_range
     if axes_scale is None:
         axes_scale = axes_aspect[1] / axes_aspect[0] * (xmax - xmin) / (ymax - ymin)
     else:
@@ -671,16 +671,19 @@ def vector_field(f, x_range, y_range, **options):
         y0 = ymin + 0.375 * ystep
 
     # The actual computations
-    f1, f2 = [fast_float(f_, x, y) for f_ in f]
-    xvals = np.arange(float(x0), float(xmax), float(xstep))
-    yvals = np.arange(float(y0), float(ymax), float(ystep))
-    xy = np.array(np.meshgrid(xvals, yvals)).reshape(2, -1).transpose()
-    if region:
-        region = fast_float(region, x, y)
-        xy = xy[[region(x0, y0) > 0 for x0, y0 in xy]]
-    vec = np.array([(f1(x0, y0), f2(x0, y0)) for x0, y0 in xy]).transpose()
+    #f1, f2 = [fast_float(f_, x, y) for f_ in f]
+    f = vectorize(f, 2, 2)
+    xvals = np.arange(x0, xmax, xstep)
+    yvals = np.arange(y0, ymax, ystep)
+    #xy = np.array(np.meshgrid(xvals, yvals)).reshape(2, -1).transpose()
+    x, y = np.array(np.meshgrid(xvals, yvals)).reshape(2, -1)
+    #if region:
+    #    region = fast_float(region, x, y)
+    #    xy = xy[[region(x0, y0) > 0 for x0, y0 in xy]]
+    #vec = np.array([(f1(x0, y0), f2(x0, y0)) for x0, y0 in xy]).transpose()
+    vec = np.array(f(x, y), dtype=float)
     keep = np.linalg.norm(vec, axis=0) > zero_threshold
-    xy = xy[keep].transpose()
+    xy = np.array((x, y))[:,keep]
     vec = vec[:,keep]
     grid_scale = np.array((xstep, ystep), dtype=float).reshape(2, 1)
     longest_vector = np.linalg.norm(vec / grid_scale, axis=0, ord=np.inf).max()
