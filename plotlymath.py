@@ -301,7 +301,7 @@ class PlotlyAxes(object):
                 x, y = scale
                 self._subplot.xaxis.constrain = "domain"
                 self._subplot.yaxis.constrain = "domain"
-                self._subplot.yaxis.scaleanchor = "x"
+                self._subplot.yaxis.scaleanchor = self._subplot.yaxis.anchor
                 self._subplot.yaxis.scaleratio = y / x
                 self._aspect_ratio = y / x
             elif isinstance(scale, str): # 3D case, one of the automatic modes
