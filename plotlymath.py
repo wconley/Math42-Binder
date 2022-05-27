@@ -351,6 +351,7 @@ class PlotlyAxes(object):
 
 # Our replacement for the make_subplots() function
 def make_figure(rows=1, cols=1, **options):
+    options = options.copy()
     squeeze = options.pop("squeeze", True)
     widget = options.pop("widget", False)
     if widget:
@@ -399,7 +400,7 @@ def text(text, location, **options):
     options.setdefault("font_color", options.pop("color", None))
     if (size := options.pop("size", None)) is not None:
         options.setdefault("font_size", size)
-    if arrow := options.pop("arrow", False):
+    if (arrow := options.pop("arrow", False)):
         options.setdefault("ax", float(arrow[0]))
         options.setdefault("ay", float(arrow[1]))
     options.setdefault("showarrow", bool(arrow))
