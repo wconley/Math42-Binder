@@ -581,7 +581,7 @@ def implicit(f, x_range, y_range, **options):
 def vector(vec, start=(0, 0), axes_scale=(1, 1), **options):
     options = options.copy()
     options.pop("plot", None) # TEMPORARY. Need to do something with this
-    arrow_style = options.pop(arrow_style, default_arrow_style)
+    arrow_style = options.pop("arrow_style", default_arrow_style)
     if isinstance(arrow_style, str):
         arrow_style = ARROW_STYLES[arrow_style]
     tipfactor = arrow_style["tipfactor"]
